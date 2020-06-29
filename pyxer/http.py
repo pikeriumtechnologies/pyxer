@@ -1,6 +1,7 @@
 from typing import Dict, Optional, List
 from yarl import URL
 from aiohttp import ClientSession
+from .mappings.channel import Channel, ExpandedChannel
 
 
 class HTTPConfig:
@@ -29,10 +30,24 @@ class HTTPClient:
             headers['Authorization'] = f'Bearer {self.config.access_token}'
 
         async with self.session.request(verb, url, json=data, headers=headers) as r:
-            #data = await r.json() if r.headers['content-type'] == 'application/json' else await r.text(encoding='utf-8')
+            data = await r.json() if 'application/json' in r.headers.get('content-type', []) else await r.text(encoding='utf-8')
 
-            if r.status != 204:
-                return await r.json()
+            if 300 > r.status >= 200:
+                return data
+
+            if r.status == 429:
+                retry_after = data['retry_after'] / 1000.0
+
+                print(f"You are being ratelimited! Retrying request after {retry_after} seconds.")
+                await asyncio.sleep(retry_after)
+                await self.request(verb, endpoint, query=query, data=data, headers=headers, clazz=clazz)
+
+                return
+
+            if r.status == 403:
+                raise Exception('Forbidden.')
+            elif r.status == 404:
+                raise Exception('Not Found.')
 
     def get_shortcode(self, scope: List[str]):
         scopes = " ".join(scope)
@@ -67,5 +82,41 @@ class HTTPClient:
     def get_current_user(self):
         return self.request('GET', 'users/current')
 
+    def get_channel_id(self, username: str):
+        '''
+        Gets a single user's channel id
+
+        Args:
+            username (str): The username of the channel you want to get
+
+        Returns:
+            json: The id of the requested user
+        '''
+        return self.request('GET', f'/channels/{username}?fields=id')
+
     def get_connection_info(self, channel_id: int):
+        '''
+        Gets the info of the supplied channel
+
+        Args:
+            channel_id (str): The channel whos information you want to get
+
+        Returns:
+            json: The channels chatroom settings if authenticated
+        '''
         return self.request('GET', f'chats/{channel_id}')
+
+    def get_channel(self, channel_id: str):
+        '''
+        Gets a single channel's info
+
+        Args:
+            channel_id (str): The channel ID
+
+        Returns:
+            json: The extended information of the requested channel
+        '''
+        return self.request('GET', f'channels/{channel_id}')
+
+    def get_ingests(self):
+        return self.request('GET', 'ingests')
